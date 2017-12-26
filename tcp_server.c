@@ -13,7 +13,7 @@
 #include <string.h>
 
 #define SERVER_PORT 55556
-#define MAX_CLIENT_NUM 3
+#define MAX_CLIENT_NUM 1024
 #define MAX_BUF_LEN 1024
 
 
@@ -88,15 +88,16 @@ int create_tcp_server(void)
 
 char is_local_ip_addr(struct sockaddr_in *client_addr)
 {
-	struct sockaddr_in tmp_addr = *client_addr;
+	in_addr_t netaddr = inet_netof(client_addr->sin_addr);
+	in_addr_t localaddr = inet_lnaof(client_addr->sin_addr);
+	log("%d, %d\n", netaddr, localaddr);
 
-	tmp_addr.sin_addr.s_addr >>= 24;
-	tmp_addr.sin_addr.s_addr &= 0xff;
-
-	if (tmp_addr.sin_addr.s_addr == 192)
+	if ((netaddr == 127 && localaddr == 1) || netaddr == 10 || 
+			netaddr == 0xC0A8 ||
+			(netaddr >= 0xAC10 && netaddr < 0xAC20))
 	{
 		return 1;
-	}
+	}	
 
 	return 0;
 }
@@ -115,7 +116,7 @@ int main()
 	char read_buf[MAX_BUF_LEN];
 	fd_set read_set;
 
-	daemon(1, 1);
+	//daemon(1, 1);
 
 	tcp_fd = create_tcp_server();
 
@@ -166,7 +167,7 @@ int main()
 					if (i >= MAX_CLIENT_NUM)
 					{
 						close(tmp_fd);
-						log("too much connect\n");
+						log("too much connect, close incoming client: %s, %d\n", inet_ntoa(tmp_addr.sin_addr), tmp_addr.sin_port);
 					}
                 }
             }
@@ -181,34 +182,39 @@ int main()
 						char * respon;
 						read_buf[read_len] = 0;
 						log("%s\n", read_buf);
-						if (strstr(read_buf, "turn_on") || strstr(read_buf, "turn_off"))
-						{
-							respon = power_on_off;
-							log("%s\n", read_buf);
-						}
-						else if (strstr(read_buf, "volume_up"))
-						{
-							respon = vol_plus;
-							log("%s\n", read_buf);
 
-						}
-						else if (strstr(read_buf, "volume_down"))
+						if (is_local_ip_addr(&cfd[i].client_addr))
 						{
-							respon = vol_minus;
-							log("%s\n", read_buf);
-						}
-
-						for(j = 0; j < MAX_CLIENT_NUM; j++)
-						{
-							if (j != i)
+							if (strstr(read_buf, "turn_on") || strstr(read_buf, "turn_off"))
 							{
-								write(cfd[j].cfd, respon, sizeof(power_on_off));
+								respon = power_on_off;
+								log("%s\n", read_buf);
+							}
+							else if (strstr(read_buf, "volume_up"))
+							{
+								respon = vol_plus;
+								log("%s\n", read_buf);
+
+							}
+							else if (strstr(read_buf, "volume_down"))
+							{
+								respon = vol_minus;
+								log("%s\n", read_buf);
+							}
+
+							for(j = 0; j < MAX_CLIENT_NUM; j++)
+							{
+								if (cfd[j].cfd >= 0 && !is_local_ip_addr(&cfd[j].client_addr))
+								{
+									write(cfd[j].cfd, respon, sizeof(power_on_off));
+								}
 							}
 						}
                     }
                     else
                     {
-                        log("client leave\n");
+						log("client leave connect %s, %d\n", inet_ntoa(cfd[i].client_addr.sin_addr),
+								cfd[i].client_addr.sin_port);
                         close(cfd[i].cfd);
                         cfd[i].cfd = -1;
                     }
@@ -223,5 +229,4 @@ int main()
 	
 	return 0;
 }
-
 
