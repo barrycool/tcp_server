@@ -11,6 +11,8 @@
 #include <asm/ioctls.h>
 #include <arpa/inet.h>
 #include <string.h>
+#include <time.h>
+#include <errno.h>
 
 #define SERVER_PORT 55556
 #define MAX_CLIENT_NUM 1024
@@ -44,6 +46,7 @@ char power_on_off[] = {
 typedef struct _cfd_t{
     int cfd;
 	struct sockaddr_in client_addr;
+	time_t last_heart_beat_time;
 }cfd_t;
 
 int create_tcp_server(void)
@@ -90,7 +93,7 @@ char is_local_ip_addr(struct sockaddr_in *client_addr)
 {
 	in_addr_t netaddr = inet_netof(client_addr->sin_addr);
 	in_addr_t localaddr = inet_lnaof(client_addr->sin_addr);
-	log("%d, %d\n", netaddr, localaddr);
+	/*log("%d, %d\n", netaddr, localaddr);*/
 
 	if ((netaddr == 127 && localaddr == 1) || netaddr == 10 || 
 			netaddr == 0xC0A8 ||
@@ -115,8 +118,9 @@ int main()
 	int read_len;
 	char read_buf[MAX_BUF_LEN];
 	fd_set read_set;
+	struct timeval select_timeout;
 
-	//daemon(1, 1);
+	daemon(1, 1);
 
 	tcp_fd = create_tcp_server();
 
@@ -127,6 +131,9 @@ int main()
 
 	while(1)
 	{
+		select_timeout.tv_sec = 60;
+		select_timeout.tv_usec = 0;
+
 		FD_ZERO(&read_set);
 
         FD_SET(tcp_fd, &read_set);
@@ -144,7 +151,7 @@ int main()
 			}
 		}
 		
-		ready_num = select(max_fd + 1, &read_set, NULL, NULL, NULL);
+		ready_num = select(max_fd + 1, &read_set, NULL, NULL, &select_timeout);
 		if (ready_num > 0)
 		{
             if (FD_ISSET(tcp_fd, &read_set))
@@ -160,6 +167,7 @@ int main()
 							log("new connect %s, %d\n", inet_ntoa(tmp_addr.sin_addr), tmp_addr.sin_port);
 							cfd[i].cfd = tmp_fd;
 							cfd[i].client_addr = tmp_addr;
+							cfd[i].last_heart_beat_time = time(NULL);
 							break;
 						}
 					}
@@ -172,7 +180,7 @@ int main()
                 }
             }
 
-			for(i = 0; i < MAX_CLIENT_NUM; i++)
+			for(i = 0; i < ready_num; i++)
 			{
 				if (cfd[i].cfd >= 0 && FD_ISSET(cfd[i].cfd, &read_set))
 				{
@@ -182,6 +190,8 @@ int main()
 						char * respon;
 						read_buf[read_len] = 0;
 						log("%s\n", read_buf);
+
+						cfd[i].last_heart_beat_time = time(NULL);
 
 						if (is_local_ip_addr(&cfd[i].client_addr))
 						{
@@ -213,7 +223,7 @@ int main()
                     }
                     else
                     {
-						log("client leave connect %s, %d\n", inet_ntoa(cfd[i].client_addr.sin_addr),
+						log("client leave : %s, %d\n", inet_ntoa(cfd[i].client_addr.sin_addr),
 								cfd[i].client_addr.sin_port);
                         close(cfd[i].cfd);
                         cfd[i].cfd = -1;
@@ -221,9 +231,23 @@ int main()
 				}
 			}
 		}
+		else if (ready_num == 0)
+		{
+			log("time out\n");
+			for(i = 0; i < MAX_CLIENT_NUM; i++)
+			{
+				if (cfd[i].cfd > 0 && time(NULL) - cfd[i].last_heart_beat_time > 180)
+				{
+						log("client time out, close : %s, %d\n", inet_ntoa(cfd[i].client_addr.sin_addr),
+								cfd[i].client_addr.sin_port);
+                        close(cfd[i].cfd);
+                        cfd[i].cfd = -1;
+				}
+			}
+		}
 		else
 		{
-            log("select ret:%d\n", ready_num);
+            log("select ret:%d, %s\n", ready_num, strerror(errno));
 		}
 	}
 	
