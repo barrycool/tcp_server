@@ -14,7 +14,8 @@
 #include <time.h>
 #include <errno.h>
 
-#define SERVER_PORT 55556
+#define COMMAND_PORT 55557
+#define DEVICE_PORT 55556
 #define MAX_CLIENT_NUM 1024
 #define MAX_BUF_LEN 1024
 
@@ -91,7 +92,7 @@ typedef struct _cfd_t{
 	time_t last_heart_beat_time;
 }cfd_t;
 
-int create_tcp_server(void)
+int create_tcp_server(unsigned short port)
 {
 	int fd;
 	int reuse_addr_flag = 1;
@@ -99,7 +100,7 @@ int create_tcp_server(void)
 
 	memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(SERVER_PORT);
+    server_addr.sin_port = htons(port);
 	server_addr.sin_addr.s_addr = htonl(INADDR_ANY),
 	fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (fd < 0)
@@ -150,8 +151,10 @@ char is_local_ip_addr(struct sockaddr_in *client_addr)
 int main()
 {
 	int i, j;
-    int tcp_fd;
-   	cfd_t cfd[MAX_CLIENT_NUM];
+    int command_fd;
+    int device_fd;
+   	cfd_t command_cfd[MAX_CLIENT_NUM];
+   	cfd_t device_cfd[MAX_CLIENT_NUM];
     int tmp_fd;
 	struct sockaddr_in tmp_addr;
     socklen_t tmp_socklen;
@@ -164,11 +167,13 @@ int main()
 
 	daemon(1, 1);
 
-	tcp_fd = create_tcp_server();
+	command_fd = create_tcp_server(COMMAND_PORT);
+	device_fd = create_tcp_server(DEVICE_PORT);
 
 	for(i = 0; i < MAX_CLIENT_NUM; i++)
 	{
-		cfd[i].cfd = -1;
+		command_cfd[i].cfd = -1;
+		device_cfd[i].cfd = -1;
 	}
 
 	while(1)
@@ -178,17 +183,27 @@ int main()
 
 		FD_ZERO(&read_set);
 
-        FD_SET(tcp_fd, &read_set);
-		max_fd = tcp_fd;
+        FD_SET(command_fd, &read_set);
+        FD_SET(device_fd, &read_set);
+		max_fd = command_fd > device_fd ? command_fd : device_fd;
 
 		for(i = 0; i < MAX_CLIENT_NUM; i++)
 		{
-			if (cfd[i].cfd >= 0)
+			if (command_cfd[i].cfd >= 0)
 			{
-				FD_SET(cfd[i].cfd, &read_set);
-				if (max_fd < cfd[i].cfd)
+				FD_SET(command_cfd[i].cfd, &read_set);
+				if (max_fd < command_cfd[i].cfd)
 				{
-					max_fd = cfd[i].cfd;
+					max_fd = command_cfd[i].cfd;
+				}
+			}
+
+			if (device_cfd[i].cfd >= 0)
+			{
+				FD_SET(device_cfd[i].cfd, &read_set);
+				if (max_fd < device_cfd[i].cfd)
+				{
+					max_fd = device_cfd[i].cfd;
 				}
 			}
 		}
@@ -196,20 +211,20 @@ int main()
 		ready_num = select(max_fd + 1, &read_set, NULL, NULL, &select_timeout);
 		if (ready_num > 0)
 		{
-            if (FD_ISSET(tcp_fd, &read_set))
+            if (FD_ISSET(command_fd, &read_set))
             {
                 tmp_socklen = sizeof(tmp_addr);
-                tmp_fd = accept(tcp_fd, (struct sockaddr*)&tmp_addr, &tmp_socklen);
+                tmp_fd = accept(command_fd, (struct sockaddr*)&tmp_addr, &tmp_socklen);
                 if (tmp_fd >= 0)
                 {
 					for(i = 0; i < MAX_CLIENT_NUM; i++)
 					{
-						if (cfd[i].cfd < 0)
+						if (command_cfd[i].cfd < 0)
 						{
 							log("new connect %s, %d\n", inet_ntoa(tmp_addr.sin_addr), tmp_addr.sin_port);
-							cfd[i].cfd = tmp_fd;
-							cfd[i].client_addr = tmp_addr;
-							cfd[i].last_heart_beat_time = time(NULL);
+							command_cfd[i].cfd = tmp_fd;
+							command_cfd[i].client_addr = tmp_addr;
+							command_cfd[i].last_heart_beat_time = time(NULL);
 							break;
 						}
 					}
@@ -217,96 +232,148 @@ int main()
 					if (i >= MAX_CLIENT_NUM)
 					{
 						close(tmp_fd);
-						log("too much connect, close incoming client: %s, %d\n", inet_ntoa(tmp_addr.sin_addr), tmp_addr.sin_port);
+						log("too much command connect, close incoming client: %s, %d\n", inet_ntoa(tmp_addr.sin_addr), tmp_addr.sin_port);
+					}
+                }
+            }
+
+            if (FD_ISSET(device_fd, &read_set))
+            {
+                tmp_socklen = sizeof(tmp_addr);
+                tmp_fd = accept(device_fd, (struct sockaddr*)&tmp_addr, &tmp_socklen);
+                if (tmp_fd >= 0)
+                {
+					for(i = 0; i < MAX_CLIENT_NUM; i++)
+					{
+						if (device_cfd[i].cfd < 0)
+						{
+							log("new connect %s, %d\n", inet_ntoa(tmp_addr.sin_addr), tmp_addr.sin_port);
+							device_cfd[i].cfd = tmp_fd;
+							device_cfd[i].client_addr = tmp_addr;
+							device_cfd[i].last_heart_beat_time = time(NULL);
+							break;
+						}
+					}
+
+					if (i >= MAX_CLIENT_NUM)
+					{
+						close(tmp_fd);
+						log("too much devices connect, close incoming client: %s, %d\n", inet_ntoa(tmp_addr.sin_addr), tmp_addr.sin_port);
 					}
                 }
             }
 
 			for(i = 0; i < ready_num; i++)
 			{
-				if (cfd[i].cfd >= 0 && FD_ISSET(cfd[i].cfd, &read_set))
+				if (command_cfd[i].cfd >= 0 && FD_ISSET(command_cfd[i].cfd, &read_set))
 				{
-                    read_len = read(cfd[i].cfd, read_buf, MAX_BUF_LEN);
+                    read_len = read(command_cfd[i].cfd, read_buf, MAX_BUF_LEN);
                     if (read_len > 0)
                     {
 						char * respon;
 						read_buf[read_len] = 0;
 						log("%s\n", read_buf);
 
-						cfd[i].last_heart_beat_time = time(NULL);
+						command_cfd[i].last_heart_beat_time = time(NULL);
 
-						if (is_local_ip_addr(&cfd[i].client_addr))
+						if (strstr(read_buf, "TurnOn") || strstr(read_buf, "TurnOff"))
 						{
-							if (strstr(read_buf, "TurnOn") || strstr(read_buf, "TurnOff"))
+							if (strstr(read_buf, "tv"))
 							{
-								if (strstr(read_buf, "tv"))
-								{
-									respon = TV_power_on_off;
-								}
-								else if (strstr(read_buf, "fan"))
-								{
-									respon = fan_mute;
-								}
-
-								log("%s\n", read_buf);
+								respon = TV_power_on_off;
 							}
-							else if (strstr(read_buf, "AdjustUpVolume"))
+							else if (strstr(read_buf, "fan"))
 							{
-								if (strstr(read_buf, "tv"))
-								{
-									respon = TV_vol_plus;
-								}
-								else if (strstr(read_buf, "fan"))
-								{
-									respon = fan_vol_plus;
-								}
-
-								log("%s\n", read_buf);
-							}
-							else if (strstr(read_buf, "AdjustDownVolume"))
-							{
-								if (strstr(read_buf, "tv"))
-								{
-									respon = TV_vol_minus;
-								}
-								else if (strstr(read_buf, "fan"))
-								{
-									respon = fan_vol_minux;
-								}
-
-								log("%s\n", read_buf);
+								respon = fan_mute;
 							}
 
-							for(j = 0; j < MAX_CLIENT_NUM; j++)
+							log("%s\n", read_buf);
+						}
+						else if (strstr(read_buf, "AdjustUpVolume"))
+						{
+							if (strstr(read_buf, "tv"))
 							{
-								if (cfd[j].cfd >= 0 && !is_local_ip_addr(&cfd[j].client_addr))
-								{
-									write(cfd[j].cfd, respon, sizeof(TV_power_on_off));
-								}
+								respon = TV_vol_plus;
+							}
+							else if (strstr(read_buf, "fan"))
+							{
+								respon = fan_vol_plus;
+							}
+
+							log("%s\n", read_buf);
+						}
+						else if (strstr(read_buf, "AdjustDownVolume"))
+						{
+							if (strstr(read_buf, "tv"))
+							{
+								respon = TV_vol_minus;
+							}
+							else if (strstr(read_buf, "fan"))
+							{
+								respon = fan_vol_minux;
+							}
+
+							log("%s\n", read_buf);
+						}
+
+						for(j = 0; j < MAX_CLIENT_NUM; j++)
+						{
+							if (device_cfd[j].cfd >= 0)
+							{
+								write(device_cfd[j].cfd, respon, sizeof(TV_power_on_off));
 							}
 						}
-                    }
-                    else
+					}
+					else
+					{
+						log("command client leave : %s, %d\n", inet_ntoa(command_cfd[i].client_addr.sin_addr),
+								command_cfd[i].client_addr.sin_port);
+						close(command_cfd[i].cfd);
+						command_cfd[i].cfd = -1;
+					}
+				}
+			}
+			
+			for(i = 0; i < ready_num; i++)
+			{
+				if (device_cfd[i].cfd >= 0 && FD_ISSET(device_cfd[i].cfd, &read_set))
+				{
+                    read_len = read(device_cfd[i].cfd, read_buf, MAX_BUF_LEN);
+                    if (read_len > 0)
                     {
-						log("client leave : %s, %d\n", inet_ntoa(cfd[i].client_addr.sin_addr),
-								cfd[i].client_addr.sin_port);
-                        close(cfd[i].cfd);
-                        cfd[i].cfd = -1;
-                    }
+						read_buf[read_len] = 0;
+						log("device: %s\n", read_buf);
+
+						device_cfd[i].last_heart_beat_time = time(NULL);
+					}
+					else
+					{
+						log("device client leave : %s, %d\n", inet_ntoa(device_cfd[i].client_addr.sin_addr),
+								device_cfd[i].client_addr.sin_port);
+						close(device_cfd[i].cfd);
+						device_cfd[i].cfd = -1;
+					}
 				}
 			}
 		}
 		else if (ready_num == 0)
 		{
-			//log("time out\n");
 			for(i = 0; i < MAX_CLIENT_NUM; i++)
 			{
-				if (cfd[i].cfd > 0 && time(NULL) - cfd[i].last_heart_beat_time > 180)
+				if (command_cfd[i].cfd > 0 && time(NULL) - command_cfd[i].last_heart_beat_time > 180)
 				{
-						log("client time out, close : %s, %d\n", inet_ntoa(cfd[i].client_addr.sin_addr),
-								cfd[i].client_addr.sin_port);
-                        close(cfd[i].cfd);
-                        cfd[i].cfd = -1;
+						log("command client time out, close : %s, %d\n", inet_ntoa(command_cfd[i].client_addr.sin_addr),
+								command_cfd[i].client_addr.sin_port);
+                        close(command_cfd[i].cfd);
+                        command_cfd[i].cfd = -1;
+				}
+
+				if (device_cfd[i].cfd > 0 && time(NULL) - device_cfd[i].last_heart_beat_time > 180)
+				{
+						log("device client time out, close : %s, %d\n", inet_ntoa(device_cfd[i].client_addr.sin_addr),
+								device_cfd[i].client_addr.sin_port);
+                        close(device_cfd[i].cfd);
+                        device_cfd[i].cfd = -1;
 				}
 			}
 		}
