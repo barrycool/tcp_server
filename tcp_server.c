@@ -272,7 +272,7 @@ int main()
                     {
 						char * respon;
 						read_buf[read_len] = 0;
-						log("%s\n", read_buf);
+						//log("%s\n", read_buf);
 
 						command_cfd[i].last_heart_beat_time = time(NULL);
 
