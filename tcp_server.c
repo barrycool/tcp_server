@@ -16,8 +16,8 @@
 
 #define COMMAND_PORT 55557
 #define DEVICE_PORT 55556
-#define MAX_CLIENT_NUM 1024
-#define MAX_BUF_LEN 1024
+#define MAX_CLIENT_NUM 102
+#define MAX_BUF_LEN 2048
 
 
 /*char vol_plus[] = {
@@ -101,8 +101,9 @@ int create_tcp_server(unsigned short port)
 	memset(&server_addr, 0, sizeof(server_addr));
 	server_addr.sin_family = AF_INET;
 	server_addr.sin_port = htons(port);
-	server_addr.sin_addr.s_addr = htonl(INADDR_ANY),
-		fd = socket(AF_INET, SOCK_STREAM, 0);
+	server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	fd = socket(AF_INET, SOCK_STREAM, 0);
+
 	if (fd < 0)
 	{
 		exit(-1);
@@ -130,22 +131,6 @@ int create_tcp_server(unsigned short port)
 	log("create tcp server OK\n");
 
 	return fd;
-}
-
-char is_local_ip_addr(struct sockaddr_in *client_addr)
-{
-	in_addr_t netaddr = inet_netof(client_addr->sin_addr);
-	in_addr_t localaddr = inet_lnaof(client_addr->sin_addr);
-	/*log("%d, %d\n", netaddr, localaddr);*/
-
-	if ((netaddr == 127 && localaddr == 1) || netaddr == 10 || 
-			netaddr == 0xC0A8 ||
-			(netaddr >= 0xAC10 && netaddr < 0xAC20))
-	{
-		return 1;
-	}	
-
-	return 0;
 }
 
 int main()
@@ -286,6 +271,10 @@ int main()
 							{
 								respon = fan_mute;
 							}
+							else if (strstr(read_buf, "light"))
+							{
+								respon = NULL;	
+							}
 
 							log("%s\n", read_buf);
 						}
@@ -320,7 +309,15 @@ int main()
 						{
 							if (device_cfd[j].cfd >= 0)
 							{
-								write(device_cfd[j].cfd, respon, sizeof(TV_power_on_off));
+								if (respon != NULL)
+								{
+									write(device_cfd[j].cfd, respon, sizeof(TV_power_on_off));
+								}
+								else
+								{
+									log("%s\n", read_buf);
+									write(device_cfd[j].cfd, read_buf, strlen(read_buf));
+								}
 							}
 						}
 					}

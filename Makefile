@@ -1,4 +1,4 @@
 
 All:
-	gcc tcp_server.c -o tcp_server
+	gcc -g tcp_server.c -o tcp_server
 
